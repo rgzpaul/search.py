@@ -1,4 +1,4 @@
-# FileGrep
+# Python Search Tool
 
 Recursive text search tool with GUI. Select a folder, enter search text, optionally filter by file extensions. Finds all occurrences across files displaying filename, line number, and matched content.
 
