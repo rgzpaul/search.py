@@ -190,13 +190,6 @@ class TextSearchApp:
         # Toggle sort direction for next click
         self.sort_reverse[col] = not self.sort_reverse[col]
 
-        # Update header to show sort direction
-        arrow = " ▼" if not self.sort_reverse[col] else " ▲"
-        headers = {"file": "File", "line": "Line", "content": "Content"}
-        for c in headers:
-            text = headers[c] + (arrow if c == col else "")
-            self.tree.heading(c, text=text)
-
     def start_search(self):
         path = self.path_var.get()
         search_text = self.search_var.get()
