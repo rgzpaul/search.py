@@ -14,6 +14,7 @@ class TextSearchApp:
         self.root.geometry("900x700")
 
         self.ftp = None  # FTP connection
+        self.sort_reverse = {"file": False, "line": False, "content": False}  # Track sort direction
 
         # Mode selection frame
         mode_frame = ttk.LabelFrame(root, text="Search Mode", padding=10)
@@ -98,9 +99,9 @@ class TextSearchApp:
         result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.tree = ttk.Treeview(result_frame, columns=("file", "line", "content"), show="headings")
-        self.tree.heading("file", text="File")
-        self.tree.heading("line", text="Line")
-        self.tree.heading("content", text="Content")
+        self.tree.heading("file", text="File", command=lambda: self.sort_column("file"))
+        self.tree.heading("line", text="Line", command=lambda: self.sort_column("line"))
+        self.tree.heading("content", text="Content", command=lambda: self.sort_column("content"))
         self.tree.column("file", width=350)
         self.tree.column("line", width=50)
         self.tree.column("content", width=450)
@@ -170,6 +171,24 @@ class TextSearchApp:
         path = filedialog.askdirectory()
         if path:
             self.path_var.set(path)
+
+    def sort_column(self, col):
+        """Sort treeview by column when header is clicked."""
+        # Get all items
+        items = [(self.tree.set(item, col), item) for item in self.tree.get_children("")]
+
+        # Sort - use numeric sort for line numbers
+        if col == "line":
+            items.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 0, reverse=self.sort_reverse[col])
+        else:
+            items.sort(key=lambda x: x[0].lower(), reverse=self.sort_reverse[col])
+
+        # Rearrange items in sorted order
+        for index, (_, item) in enumerate(items):
+            self.tree.move(item, "", index)
+
+        # Toggle sort direction for next click
+        self.sort_reverse[col] = not self.sort_reverse[col]
 
     def start_search(self):
         path = self.path_var.get()
