@@ -3,7 +3,7 @@ import io
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
-import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ftplib import FTP
 
 
@@ -215,43 +215,95 @@ class TextSearchApp:
             threading.Thread(target=self.search_files_ftp, args=(path, search_text, extensions), daemon=True).start()
 
     def search_files_local(self, path, search_text, extensions):
-        """Search files on local filesystem."""
-        count = 0
+        """Search files on local filesystem using parallel processing."""
         case_sensitive = self.case_var.get()
         search_lower = search_text if case_sensitive else search_text.lower()
 
+        # Collect all files first
+        all_files = []
         for root_dir, _, files in os.walk(path):
             for file in files:
-                # Filter by extension if specified
                 if extensions:
                     file_ext = file.rsplit('.', 1)[-1].lower() if '.' in file else ''
                     if file_ext not in extensions:
                         continue
+                all_files.append(os.path.join(root_dir, file))
 
-                filepath = os.path.join(root_dir, file)
-                self.status_var.set(f"Scanning: {filepath}")
+        total_files = len(all_files)
+        results = []
+        results_lock = threading.Lock()
 
-                try:
-                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                        for line_num, line in enumerate(f, 1):
-                            compare_line = line if case_sensitive else line.lower()
-                            if search_lower in compare_line:
-                                count += 1
-                                self.tree.insert("", tk.END, values=(
-                                    filepath,
-                                    line_num,
-                                    line.strip()[:200]
-                                ))
-                except:
-                    pass
+        def is_binary(filepath):
+            """Quick check for binary files by looking for null bytes."""
+            try:
+                with open(filepath, 'rb') as f:
+                    chunk = f.read(8192)
+                    return b'\x00' in chunk
+            except:
+                return True
 
-        self.status_var.set(f"Done. Found {count} matches.")
+        def search_single_file(filepath):
+            """Search a single file and return matches."""
+            matches = []
+            if is_binary(filepath):
+                return matches
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line_num, line in enumerate(f, 1):
+                        compare_line = line if case_sensitive else line.lower()
+                        if search_lower in compare_line:
+                            matches.append((filepath, line_num, line.strip()[:200]))
+            except:
+                pass
+            return matches
+
+        processed = [0]
+
+        def update_progress():
+            self.status_var.set(f"Scanning: {processed[0]}/{total_files} files...")
+
+        # Use thread pool for parallel file searching
+        max_workers = min(32, (os.cpu_count() or 1) * 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {executor.submit(search_single_file, f): f for f in all_files}
+
+            batch = []
+            batch_size = 100
+
+            for future in as_completed(future_to_file):
+                processed[0] += 1
+                if processed[0] % 50 == 0:
+                    self.root.after(0, update_progress)
+
+                file_matches = future.result()
+                if file_matches:
+                    batch.extend(file_matches)
+
+                    # Insert in batches to reduce UI overhead
+                    if len(batch) >= batch_size:
+                        batch_to_insert = batch[:]
+                        batch.clear()
+                        self.root.after(0, lambda b=batch_to_insert: self._insert_batch(b))
+
+            # Insert remaining results
+            if batch:
+                self.root.after(0, lambda b=batch: self._insert_batch(b))
+
+        total_matches = sum(1 for _ in self.tree.get_children())
+        self.status_var.set(f"Done. Found {total_matches} matches in {total_files} files.")
+
+    def _insert_batch(self, batch):
+        """Insert a batch of results into the treeview."""
+        for filepath, line_num, content in batch:
+            self.tree.insert("", tk.END, values=(filepath, line_num, content))
 
     def search_files_ftp(self, path, search_text, extensions):
-        """Search files on FTP server recursively."""
-        count = [0]  # Use list for mutability in nested function
+        """Search files on FTP server recursively with batched UI updates."""
         case_sensitive = self.case_var.get()
         search_lower = search_text if case_sensitive else search_text.lower()
+        batch = []
+        batch_size = 50
+        match_count = [0]
 
         def list_files_recursive(ftp_path):
             """Recursively list all files in FTP directory."""
@@ -272,62 +324,67 @@ class TextSearchApp:
 
                     full_path = f"{ftp_path.rstrip('/')}/{name}"
 
-                    # Check if it's a directory
                     if item.startswith('d'):
                         files.extend(list_files_recursive(full_path))
                     else:
                         files.append(full_path)
-            except Exception as e:
+            except:
                 pass
-
             return files
 
-        def search_ftp_file(filepath):
-            """Download and search a single FTP file."""
-            try:
-                self.status_var.set(f"Scanning: {filepath}")
+        def flush_batch():
+            """Send current batch to UI."""
+            if batch:
+                batch_copy = batch[:]
+                batch.clear()
+                self.root.after(0, lambda b=batch_copy: self._insert_batch(b))
 
-                # Download file content to memory
+        def search_ftp_file(filepath, file_idx, total):
+            """Download and search a single FTP file."""
+            if file_idx % 10 == 0:
+                self.root.after(0, lambda: self.status_var.set(f"Scanning: {file_idx}/{total} files..."))
+
+            try:
                 content = io.BytesIO()
                 self.ftp.retrbinary(f'RETR {filepath}', content.write)
-                content.seek(0)
+                raw_data = content.getvalue()
 
-                # Try to decode as text
-                try:
-                    text = content.read().decode('utf-8', errors='ignore')
-                except:
+                # Skip binary files (check for null bytes)
+                if b'\x00' in raw_data[:8192]:
                     return
 
+                text = raw_data.decode('utf-8', errors='ignore')
                 lines = text.split('\n')
+
                 for line_num, line in enumerate(lines, 1):
                     compare_line = line if case_sensitive else line.lower()
                     if search_lower in compare_line:
-                        count[0] += 1
-                        self.root.after(0, lambda fp=filepath, ln=line_num, l=line:
-                            self.tree.insert("", tk.END, values=(
-                                fp,
-                                ln,
-                                l.strip()[:200]
-                            ))
-                        )
-            except Exception as e:
+                        match_count[0] += 1
+                        batch.append((filepath, line_num, line.strip()[:200]))
+
+                        if len(batch) >= batch_size:
+                            flush_batch()
+            except:
                 pass
 
         try:
             self.status_var.set("Listing FTP files...")
             all_files = list_files_recursive(path)
 
-            # Filter by extensions if specified
             if extensions:
                 all_files = [f for f in all_files
                            if '.' in f and f.rsplit('.', 1)[-1].lower() in extensions]
 
-            self.status_var.set(f"Found {len(all_files)} files. Searching...")
+            total = len(all_files)
+            self.status_var.set(f"Found {total} files. Searching...")
 
-            for filepath in all_files:
-                search_ftp_file(filepath)
+            for idx, filepath in enumerate(all_files):
+                search_ftp_file(filepath, idx, total)
 
-            self.status_var.set(f"Done. Found {count[0]} matches in {len(all_files)} files.")
+            # Flush remaining results
+            flush_batch()
+
+            self.status_var.set(f"Done. Found {match_count[0]} matches in {total} files.")
 
         except Exception as e:
             self.status_var.set(f"Error: {str(e)}")
