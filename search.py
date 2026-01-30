@@ -174,18 +174,21 @@ class TextSearchApp:
 
     def sort_column(self, col):
         """Sort treeview by column when header is clicked."""
-        # Get all items
-        items = [(self.tree.set(item, col), item) for item in self.tree.get_children("")]
+        # Get all items with their full values
+        items = [self.tree.item(item)["values"] for item in self.tree.get_children("")]
 
         # Sort - use numeric sort for line numbers
+        col_index = ["file", "line", "content"].index(col)
         if col == "line":
-            items.sort(key=lambda x: int(x[0]) if x[0].isdigit() else 0, reverse=self.sort_reverse[col])
+            items.sort(key=lambda x: int(x[col_index]) if str(x[col_index]).isdigit() else 0,
+                       reverse=self.sort_reverse[col])
         else:
-            items.sort(key=lambda x: x[0].lower(), reverse=self.sort_reverse[col])
+            items.sort(key=lambda x: str(x[col_index]).lower(), reverse=self.sort_reverse[col])
 
-        # Rearrange items in sorted order
-        for index, (_, item) in enumerate(items):
-            self.tree.move(item, "", index)
+        # Delete all and reinsert in sorted order (O(n) vs O(n²) for move)
+        self.tree.delete(*self.tree.get_children(""))
+        for values in items:
+            self.tree.insert("", tk.END, values=values)
 
         # Toggle sort direction for next click
         self.sort_reverse[col] = not self.sort_reverse[col]
