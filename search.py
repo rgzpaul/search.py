@@ -17,6 +17,8 @@ class TextSearchApp:
         self.root.geometry("900x700")
 
         self.ftp = None  # FTP connection
+        self.ftp_lock = threading.Lock()  # Prevent concurrent FTP commands
+        self.ftp_creds = {}  # Store credentials for auto-reconnect
         self.sort_reverse = {"file": False, "line": False, "content": False}  # Track sort direction
 
         # Mode selection frame
@@ -226,8 +228,10 @@ class TextSearchApp:
                 tmp_dir = tempfile.mkdtemp(prefix="search_ftp_")
                 local_path = os.path.join(tmp_dir, filename)
 
-                with open(local_path, 'wb') as f:
-                    self.ftp.retrbinary(f'RETR {remote_path}', f.write)
+                with self.ftp_lock:
+                    self._ensure_ftp()
+                    with open(local_path, 'wb') as f:
+                        self.ftp.retrbinary(f'RETR {remote_path}', f.write)
 
                 mtime_before = os.path.getmtime(local_path)
                 self.open_file_local(local_path)
@@ -260,8 +264,10 @@ class TextSearchApp:
                         "No Changes", "File was not modified. Nothing to upload."))
                     return
 
-                with open(local_path, 'rb') as f:
-                    self.ftp.storbinary(f'STOR {remote_path}', f)
+                with self.ftp_lock:
+                    self._ensure_ftp()
+                    with open(local_path, 'rb') as f:
+                        self.ftp.storbinary(f'STOR {remote_path}', f)
 
                 self.root.after(0, lambda: messagebox.showinfo(
                     "Uploaded", f"Changes uploaded to:\n{remote_path}"))
@@ -297,13 +303,8 @@ class TextSearchApp:
 
         try:
             port = int(port) if port else 21
-            self.ftp = FTP()
-            self.ftp.connect(host, port, timeout=30)
-
-            if user:
-                self.ftp.login(user, password)
-            else:
-                self.ftp.login()  # Anonymous login
+            self.ftp_creds = {"host": host, "port": port, "user": user, "password": password}
+            self._ftp_connect(host, port, user, password)
 
             self.ftp_status_var.set(f"Connected to {host}")
             self.connect_btn.config(state=tk.DISABLED)
@@ -313,6 +314,29 @@ class TextSearchApp:
         except Exception as e:
             self.ftp = None
             messagebox.showerror("Connection Error", str(e))
+
+    def _ftp_connect(self, host, port, user, password):
+        """Low-level FTP connect + login + passive mode."""
+        self.ftp = FTP()
+        self.ftp.connect(host, port, timeout=30)
+        if user:
+            self.ftp.login(user, password)
+        else:
+            self.ftp.login()
+        self.ftp.set_pasv(True)
+
+    def _ensure_ftp(self):
+        """Check FTP connection is alive, reconnect if needed. Call inside ftp_lock."""
+        if not self.ftp:
+            raise ConnectionError("Not connected to FTP server")
+        try:
+            self.ftp.voidcmd("NOOP")
+        except Exception:
+            # Connection dropped, try to reconnect
+            c = self.ftp_creds
+            if not c:
+                raise ConnectionError("FTP connection lost and no credentials to reconnect")
+            self._ftp_connect(c["host"], c["port"], c["user"], c["password"])
 
     def disconnect_ftp(self):
         """Disconnect from FTP server."""
@@ -328,9 +352,77 @@ class TextSearchApp:
         self.disconnect_btn.config(state=tk.DISABLED)
 
     def browse_path(self):
-        path = filedialog.askdirectory()
-        if path:
-            self.path_var.set(path)
+        if self.mode_var.get() == "ftp":
+            self.browse_ftp()
+        else:
+            path = filedialog.askdirectory()
+            if path:
+                self.path_var.set(path)
+
+    def browse_ftp(self):
+        """Show a dialog to browse FTP directories."""
+        if not self.ftp:
+            messagebox.showwarning("Warning", "Connect to FTP server first")
+            return
+
+        current = self.path_var.get().strip() or "/"
+
+        try:
+            with self.ftp_lock:
+                self._ensure_ftp()
+                self.ftp.cwd(current)
+                items = []
+                self.ftp.retrlines('LIST', items.append)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not list directory:\n{e}")
+            return
+
+        dirs = []
+        for item in items:
+            parts = item.split(None, 8)
+            if len(parts) >= 9 and item.startswith('d'):
+                name = parts[8]
+                if name not in ('.', '..'):
+                    dirs.append(name)
+        dirs.sort()
+
+        if not dirs:
+            messagebox.showinfo("Browse FTP", f"No subdirectories in {current}")
+            return
+
+        # Simple selection dialog
+        win = tk.Toplevel(self.root)
+        win.title("Browse FTP Directory")
+        win.geometry("400x350")
+        win.transient(self.root)
+        win.grab_set()
+
+        ttk.Label(win, text=f"Current: {current}").pack(padx=10, pady=(10, 5), anchor="w")
+
+        listbox = tk.Listbox(win, selectmode=tk.SINGLE)
+        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # Add parent directory option
+        if current != "/":
+            listbox.insert(tk.END, "..")
+        for d in dirs:
+            listbox.insert(tk.END, d)
+
+        def on_select():
+            sel = listbox.curselection()
+            if not sel:
+                return
+            chosen = listbox.get(sel[0])
+            if chosen == "..":
+                new_path = "/".join(current.rstrip("/").split("/")[:-1]) or "/"
+            else:
+                new_path = f"{current.rstrip('/')}/{chosen}"
+            self.path_var.set(new_path)
+            win.destroy()
+
+        ttk.Button(win, text="Select", command=on_select).pack(side=tk.LEFT, padx=10, pady=10)
+        ttk.Button(win, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=10, pady=10)
+        listbox.bind("<Double-1>", lambda e: on_select())
 
     def sort_column(self, col):
         """Sort treeview by column when header is clicked."""
@@ -421,8 +513,10 @@ class TextSearchApp:
             files = []
             try:
                 items = []
-                self.ftp.cwd(ftp_path)
-                self.ftp.retrlines('LIST', items.append)
+                with self.ftp_lock:
+                    self._ensure_ftp()
+                    self.ftp.cwd(ftp_path)
+                    self.ftp.retrlines('LIST', items.append)
 
                 for item in items:
                     parts = item.split(None, 8)
@@ -452,7 +546,9 @@ class TextSearchApp:
 
                 # Download file content to memory
                 content = io.BytesIO()
-                self.ftp.retrbinary(f'RETR {filepath}', content.write)
+                with self.ftp_lock:
+                    self._ensure_ftp()
+                    self.ftp.retrbinary(f'RETR {filepath}', content.write)
                 content.seek(0)
 
                 # Try to decode as text
