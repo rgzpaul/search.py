@@ -20,6 +20,7 @@ class TextSearchApp:
         self.ftp_lock = threading.Lock()  # Prevent concurrent FTP commands
         self.ftp_creds = {}  # Store credentials for auto-reconnect
         self.sort_reverse = {"file": False, "line": False, "content": False}  # Track sort direction
+        self._stop_event = threading.Event()
 
         # Mode selection frame
         mode_frame = ttk.LabelFrame(root, text="Search Mode", padding=10)
@@ -89,7 +90,10 @@ class TextSearchApp:
         self.ext_var = tk.StringVar(value="")
         ttk.Entry(top_frame, textvariable=self.ext_var, width=15).pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(top_frame, text="Search", command=self.start_search).pack(side=tk.LEFT)
+        self.search_btn = ttk.Button(top_frame, text="Search", command=self.start_search)
+        self.search_btn.pack(side=tk.LEFT)
+        self.stop_btn = ttk.Button(top_frame, text="Stop", command=self.stop_search, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         # Case sensitive checkbox
         self.case_var = tk.BooleanVar()
@@ -475,6 +479,15 @@ class TextSearchApp:
         # Toggle sort direction for next click
         self.sort_reverse[col] = not self.sort_reverse[col]
 
+    def stop_search(self):
+        """Signal the running search to stop."""
+        self._stop_event.set()
+
+    def _search_finished(self):
+        """Reset UI state after search completes or is stopped."""
+        self.search_btn.config(state=tk.NORMAL)
+        self.stop_btn.config(state=tk.DISABLED)
+
     def start_search(self):
         path = self.path_var.get()
         search_text = self.search_var.get()
@@ -483,9 +496,14 @@ class TextSearchApp:
             messagebox.showwarning("Warning", "Please enter path and search text")
             return
 
+        self._stop_event.clear()
+        self.search_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+
         if self.mode_var.get() == "local":
             if not os.path.isdir(path):
                 messagebox.showerror("Error", "Invalid path")
+                self._search_finished()
                 return
             self.tree.delete(*self.tree.get_children())
             extensions = [e.strip().lower().lstrip('.') for e in self.ext_var.get().split(',') if e.strip()]
@@ -494,6 +512,7 @@ class TextSearchApp:
             # FTP mode
             if not self.ftp:
                 messagebox.showwarning("Warning", "Please connect to FTP server first")
+                self._search_finished()
                 return
             self.tree.delete(*self.tree.get_children())
             extensions = [e.strip().lower().lstrip('.') for e in self.ext_var.get().split(',') if e.strip()]
@@ -502,11 +521,19 @@ class TextSearchApp:
     def search_files_local(self, path, search_text, extensions):
         """Search files on local filesystem."""
         count = 0
+        stopped = False
         case_sensitive = self.case_var.get()
         search_lower = search_text if case_sensitive else search_text.lower()
 
         for root_dir, _, files in os.walk(path):
+            if self._stop_event.is_set():
+                stopped = True
+                break
             for file in files:
+                if self._stop_event.is_set():
+                    stopped = True
+                    break
+
                 # Filter by extension if specified
                 if extensions:
                     file_ext = file.rsplit('.', 1)[-1].lower() if '.' in file else ''
@@ -519,6 +546,9 @@ class TextSearchApp:
                 try:
                     with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                         for line_num, line in enumerate(f, 1):
+                            if self._stop_event.is_set():
+                                stopped = True
+                                break
                             compare_line = line if case_sensitive else line.lower()
                             if search_lower in compare_line:
                                 count += 1
@@ -532,16 +562,23 @@ class TextSearchApp:
                 except:
                     pass
 
-        self.status_var.set(f"Done. Found {count} matches.")
+        if stopped:
+            self.status_var.set(f"Stopped. Found {count} matches so far.")
+        else:
+            self.status_var.set(f"Done. Found {count} matches.")
+        self.root.after(0, self._search_finished)
 
     def search_files_ftp(self, path, search_text, extensions):
         """Search files on FTP server recursively."""
         count = [0]  # Use list for mutability in nested function
+        stopped = [False]
         case_sensitive = self.case_var.get()
         search_lower = search_text if case_sensitive else search_text.lower()
 
         def list_files_recursive(ftp_path):
             """Recursively list all files in FTP directory."""
+            if self._stop_event.is_set():
+                return []
             files = []
             try:
                 items = []
@@ -551,6 +588,8 @@ class TextSearchApp:
                     self.ftp.retrlines('LIST', items.append)
 
                 for item in items:
+                    if self._stop_event.is_set():
+                        break
                     parts = item.split(None, 8)
                     if len(parts) < 9:
                         continue
@@ -591,6 +630,8 @@ class TextSearchApp:
 
                 lines = text.split('\n')
                 for line_num, line in enumerate(lines, 1):
+                    if self._stop_event.is_set():
+                        break
                     compare_line = line if case_sensitive else line.lower()
                     if search_lower in compare_line:
                         count[0] += 1
@@ -616,12 +657,20 @@ class TextSearchApp:
             self.status_var.set(f"Found {len(all_files)} files. Searching...")
 
             for filepath in all_files:
+                if self._stop_event.is_set():
+                    stopped[0] = True
+                    break
                 search_ftp_file(filepath)
 
-            self.status_var.set(f"Done. Found {count[0]} matches in {len(all_files)} files.")
+            if stopped[0] or self._stop_event.is_set():
+                self.status_var.set(f"Stopped. Found {count[0]} matches so far.")
+            else:
+                self.status_var.set(f"Done. Found {count[0]} matches in {len(all_files)} files.")
 
         except Exception as e:
             self.status_var.set(f"Error: {str(e)}")
+        finally:
+            self.root.after(0, self._search_finished)
 
 
 if __name__ == "__main__":
