@@ -190,12 +190,12 @@ class TextSearchApp:
             messagebox.showerror("Error", f"Could not open folder:\n{e}")
 
     def open_file_ftp(self, remote_path):
-        """Download an FTP file to a temp location and open it."""
+        """Download an FTP file, open it for editing, and re-upload if changed."""
         if not self.ftp:
             messagebox.showwarning("Warning", "Not connected to FTP server")
             return
 
-        def download_and_open():
+        def download_edit_upload():
             try:
                 filename = os.path.basename(remote_path)
                 tmp_dir = tempfile.mkdtemp(prefix="search_ftp_")
@@ -204,12 +204,46 @@ class TextSearchApp:
                 with open(local_path, 'wb') as f:
                     self.ftp.retrbinary(f'RETR {remote_path}', f.write)
 
+                mtime_before = os.path.getmtime(local_path)
                 self.open_file_local(local_path)
+
+                # Ask user to confirm when done editing
+                self.root.after(0, lambda: self.prompt_ftp_reupload(
+                    local_path, remote_path, mtime_before))
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror(
                     "Error", f"Could not download file:\n{e}"))
 
-        threading.Thread(target=download_and_open, daemon=True).start()
+        threading.Thread(target=download_edit_upload, daemon=True).start()
+
+    def prompt_ftp_reupload(self, local_path, remote_path, mtime_before):
+        """Ask user if they want to upload changes back to FTP."""
+        result = messagebox.askyesno(
+            "Upload Changes?",
+            f"File opened for editing:\n{os.path.basename(local_path)}\n\n"
+            f"Click Yes when done editing to upload changes back to:\n{remote_path}\n\n"
+            f"Click No to discard changes.")
+        if not result:
+            return
+
+        def do_upload():
+            try:
+                mtime_after = os.path.getmtime(local_path)
+                if mtime_after == mtime_before:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "No Changes", "File was not modified. Nothing to upload."))
+                    return
+
+                with open(local_path, 'rb') as f:
+                    self.ftp.storbinary(f'STOR {remote_path}', f)
+
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Uploaded", f"Changes uploaded to:\n{remote_path}"))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Upload Error", f"Could not upload file:\n{e}"))
+
+        threading.Thread(target=do_upload, daemon=True).start()
 
     def toggle_mode(self):
         """Show/hide FTP options based on selected mode."""
