@@ -1,5 +1,8 @@
 import os
 import io
+import sys
+import subprocess
+import platform
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
@@ -111,6 +114,102 @@ class TextSearchApp:
 
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Right-click context menu
+        self.context_menu = tk.Menu(self.tree, tearoff=0)
+        self.tree.bind("<Button-3>", self.show_context_menu)
+
+    def show_context_menu(self, event):
+        """Show right-click context menu on treeview item."""
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+
+        self.tree.selection_set(item)
+        values = self.tree.item(item, "values")
+        if not values:
+            return
+
+        self.context_menu.delete(0, tk.END)
+
+        filepath = values[0]
+        line_num = values[1]
+        content = values[2]
+
+        if self.mode_var.get() == "local":
+            self.context_menu.add_command(
+                label="Open File",
+                command=lambda: self.open_file_local(filepath))
+            self.context_menu.add_command(
+                label="Open Containing Folder",
+                command=lambda: self.open_folder_local(filepath))
+            self.context_menu.add_separator()
+        else:
+            self.context_menu.add_command(
+                label="Download && Open File",
+                command=lambda: self.open_file_ftp(filepath))
+            self.context_menu.add_separator()
+
+        self.context_menu.add_command(
+            label="Copy File Path",
+            command=lambda: self.copy_to_clipboard(filepath))
+        self.context_menu.add_command(
+            label="Copy Line Content",
+            command=lambda: self.copy_to_clipboard(content))
+
+        self.context_menu.tk_popup(event.x_root, event.y_root)
+
+    def copy_to_clipboard(self, text):
+        """Copy text to system clipboard."""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+
+    def open_file_local(self, filepath):
+        """Open a local file with the system default application."""
+        try:
+            if platform.system() == "Windows":
+                os.startfile(filepath)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", filepath])
+            else:
+                subprocess.Popen(["xdg-open", filepath])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open file:\n{e}")
+
+    def open_folder_local(self, filepath):
+        """Open the containing folder of a local file."""
+        folder = os.path.dirname(filepath)
+        try:
+            if platform.system() == "Windows":
+                os.startfile(folder)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open folder:\n{e}")
+
+    def open_file_ftp(self, remote_path):
+        """Download an FTP file to a temp location and open it."""
+        if not self.ftp:
+            messagebox.showwarning("Warning", "Not connected to FTP server")
+            return
+
+        def download_and_open():
+            try:
+                filename = os.path.basename(remote_path)
+                tmp_dir = tempfile.mkdtemp(prefix="search_ftp_")
+                local_path = os.path.join(tmp_dir, filename)
+
+                with open(local_path, 'wb') as f:
+                    self.ftp.retrbinary(f'RETR {remote_path}', f.write)
+
+                self.open_file_local(local_path)
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", f"Could not download file:\n{e}"))
+
+        threading.Thread(target=download_and_open, daemon=True).start()
 
     def toggle_mode(self):
         """Show/hide FTP options based on selected mode."""
