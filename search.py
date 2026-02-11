@@ -365,64 +365,86 @@ class TextSearchApp:
             messagebox.showwarning("Warning", "Connect to FTP server first")
             return
 
-        current = self.path_var.get().strip() or "/"
+        current_path = [self.path_var.get().strip() or "/"]
 
-        try:
-            with self.ftp_lock:
-                self._ensure_ftp()
-                self.ftp.cwd(current)
-                items = []
-                self.ftp.retrlines('LIST', items.append)
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not list directory:\n{e}")
-            return
-
-        dirs = []
-        for item in items:
-            parts = item.split(None, 8)
-            if len(parts) >= 9 and item.startswith('d'):
-                name = parts[8]
-                if name not in ('.', '..'):
-                    dirs.append(name)
-        dirs.sort()
-
-        if not dirs:
-            messagebox.showinfo("Browse FTP", f"No subdirectories in {current}")
-            return
-
-        # Simple selection dialog
         win = tk.Toplevel(self.root)
         win.title("Browse FTP Directory")
         win.geometry("400x350")
         win.transient(self.root)
         win.grab_set()
 
-        ttk.Label(win, text=f"Current: {current}").pack(padx=10, pady=(10, 5), anchor="w")
+        path_label = ttk.Label(win, text=f"Current: {current_path[0]}")
+        path_label.pack(padx=10, pady=(10, 5), anchor="w")
 
         listbox = tk.Listbox(win, selectmode=tk.SINGLE)
         listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        # Add parent directory option
-        if current != "/":
-            listbox.insert(tk.END, "..")
-        for d in dirs:
-            listbox.insert(tk.END, d)
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Button(btn_frame, text="Open", command=lambda: navigate()).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Select This Folder", command=lambda: select_current()).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Cancel", command=win.destroy).pack(side=tk.RIGHT)
 
-        def on_select():
+        def load_dir(ftp_path):
+            """Load directory listing in background thread."""
+            listbox.delete(0, tk.END)
+            listbox.insert(tk.END, "Loading...")
+
+            def fetch():
+                try:
+                    with self.ftp_lock:
+                        self._ensure_ftp()
+                        self.ftp.cwd(ftp_path)
+                        items = []
+                        self.ftp.retrlines('LIST', items.append)
+
+                    dirs = []
+                    for item in items:
+                        parts = item.split(None, 8)
+                        if len(parts) >= 9 and item.startswith('d'):
+                            name = parts[8]
+                            if name not in ('.', '..'):
+                                dirs.append(name)
+                    dirs.sort()
+
+                    def update_ui():
+                        listbox.delete(0, tk.END)
+                        if ftp_path != "/":
+                            listbox.insert(tk.END, "..")
+                        for d in dirs:
+                            listbox.insert(tk.END, d)
+                        if not dirs and ftp_path == "/":
+                            listbox.insert(tk.END, "(empty)")
+                        current_path[0] = ftp_path
+                        path_label.config(text=f"Current: {ftp_path}")
+
+                    win.after(0, update_ui)
+                except Exception as e:
+                    err_msg = str(e)
+                    win.after(0, lambda: listbox.delete(0, tk.END))
+                    win.after(0, lambda: listbox.insert(tk.END, f"Error: {err_msg}"))
+
+            threading.Thread(target=fetch, daemon=True).start()
+
+        def navigate():
             sel = listbox.curselection()
             if not sel:
                 return
             chosen = listbox.get(sel[0])
+            if chosen.startswith("(") or chosen.startswith("Error") or chosen == "Loading...":
+                return
             if chosen == "..":
-                new_path = "/".join(current.rstrip("/").split("/")[:-1]) or "/"
+                new_path = "/".join(current_path[0].rstrip("/").split("/")[:-1]) or "/"
             else:
-                new_path = f"{current.rstrip('/')}/{chosen}"
-            self.path_var.set(new_path)
+                new_path = f"{current_path[0].rstrip('/')}/{chosen}"
+            load_dir(new_path)
+
+        def select_current():
+            self.path_var.set(current_path[0])
             win.destroy()
 
-        ttk.Button(win, text="Select", command=on_select).pack(side=tk.LEFT, padx=10, pady=10)
-        ttk.Button(win, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=10, pady=10)
-        listbox.bind("<Double-1>", lambda e: on_select())
+        listbox.bind("<Double-1>", lambda e: navigate())
+        load_dir(current_path[0])
 
     def sort_column(self, col):
         """Sort treeview by column when header is clicked."""
