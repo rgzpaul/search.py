@@ -1,5 +1,8 @@
 import os
 import io
+import sys
+import subprocess
+import platform
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import threading
@@ -111,6 +114,136 @@ class TextSearchApp:
 
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Right-click context menu
+        self.context_menu = tk.Menu(self.tree, tearoff=0)
+        self.tree.bind("<Button-3>", self.show_context_menu)
+
+    def show_context_menu(self, event):
+        """Show right-click context menu on treeview item."""
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+
+        self.tree.selection_set(item)
+        values = self.tree.item(item, "values")
+        if not values:
+            return
+
+        self.context_menu.delete(0, tk.END)
+
+        filepath = values[0]
+        line_num = values[1]
+        content = values[2]
+
+        if self.mode_var.get() == "local":
+            self.context_menu.add_command(
+                label="Open File",
+                command=lambda: self.open_file_local(filepath))
+            self.context_menu.add_command(
+                label="Open Containing Folder",
+                command=lambda: self.open_folder_local(filepath))
+            self.context_menu.add_separator()
+        else:
+            self.context_menu.add_command(
+                label="Download && Open File",
+                command=lambda: self.open_file_ftp(filepath))
+            self.context_menu.add_separator()
+
+        self.context_menu.add_command(
+            label="Copy File Path",
+            command=lambda: self.copy_to_clipboard(filepath))
+        self.context_menu.add_command(
+            label="Copy Line Content",
+            command=lambda: self.copy_to_clipboard(content))
+
+        self.context_menu.tk_popup(event.x_root, event.y_root)
+
+    def copy_to_clipboard(self, text):
+        """Copy text to system clipboard."""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+
+    def open_file_local(self, filepath):
+        """Open a local file with the system default application."""
+        try:
+            if platform.system() == "Windows":
+                os.startfile(filepath)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", filepath])
+            else:
+                subprocess.Popen(["xdg-open", filepath])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open file:\n{e}")
+
+    def open_folder_local(self, filepath):
+        """Open the containing folder of a local file."""
+        folder = os.path.dirname(filepath)
+        try:
+            if platform.system() == "Windows":
+                os.startfile(folder)
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open folder:\n{e}")
+
+    def open_file_ftp(self, remote_path):
+        """Download an FTP file, open it for editing, and re-upload if changed."""
+        if not self.ftp:
+            messagebox.showwarning("Warning", "Not connected to FTP server")
+            return
+
+        def download_edit_upload():
+            try:
+                filename = os.path.basename(remote_path)
+                tmp_dir = tempfile.mkdtemp(prefix="search_ftp_")
+                local_path = os.path.join(tmp_dir, filename)
+
+                with open(local_path, 'wb') as f:
+                    self.ftp.retrbinary(f'RETR {remote_path}', f.write)
+
+                mtime_before = os.path.getmtime(local_path)
+                self.open_file_local(local_path)
+
+                # Ask user to confirm when done editing
+                self.root.after(0, lambda: self.prompt_ftp_reupload(
+                    local_path, remote_path, mtime_before))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Error", f"Could not download file:\n{e}"))
+
+        threading.Thread(target=download_edit_upload, daemon=True).start()
+
+    def prompt_ftp_reupload(self, local_path, remote_path, mtime_before):
+        """Ask user if they want to upload changes back to FTP."""
+        result = messagebox.askyesno(
+            "Upload Changes?",
+            f"File opened for editing:\n{os.path.basename(local_path)}\n\n"
+            f"Click Yes when done editing to upload changes back to:\n{remote_path}\n\n"
+            f"Click No to discard changes.")
+        if not result:
+            return
+
+        def do_upload():
+            try:
+                mtime_after = os.path.getmtime(local_path)
+                if mtime_after == mtime_before:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "No Changes", "File was not modified. Nothing to upload."))
+                    return
+
+                with open(local_path, 'rb') as f:
+                    self.ftp.storbinary(f'STOR {remote_path}', f)
+
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Uploaded", f"Changes uploaded to:\n{remote_path}"))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Upload Error", f"Could not upload file:\n{e}"))
+
+        threading.Thread(target=do_upload, daemon=True).start()
 
     def toggle_mode(self):
         """Show/hide FTP options based on selected mode."""
