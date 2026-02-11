@@ -282,7 +282,6 @@ class TextSearchApp:
         """Show/hide FTP options based on selected mode."""
         if self.mode_var.get() == "ftp":
             self.ftp_frame.pack(fill=tk.X, padx=10, pady=5, after=self.root.winfo_children()[0])
-            self.browse_btn.config(state=tk.DISABLED)
             self.path_var.set("/")  # Default FTP root
         else:
             self.ftp_frame.pack_forget()
