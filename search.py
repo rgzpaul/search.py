@@ -125,37 +125,62 @@ class TextSearchApp:
         if not item:
             return
 
-        self.tree.selection_set(item)
-        values = self.tree.item(item, "values")
-        if not values:
-            return
+        # Keep existing selection if right-clicking within it, otherwise select clicked item
+        selected = self.tree.selection()
+        if item not in selected:
+            self.tree.selection_set(item)
+            selected = (item,)
 
         self.context_menu.delete(0, tk.END)
 
-        filepath = values[0]
-        line_num = values[1]
-        content = values[2]
+        # Collect info from all selected items
+        items_info = []
+        for sel in selected:
+            values = self.tree.item(sel, "values")
+            if values:
+                items_info.append({"filepath": values[0], "line": values[1], "content": values[2]})
+
+        if not items_info:
+            return
+
+        count = len(items_info)
+        filepaths = [info["filepath"] for info in items_info]
 
         if self.mode_var.get() == "local":
-            self.context_menu.add_command(
-                label="Open File",
-                command=lambda: self.open_file_local(filepath))
-            self.context_menu.add_command(
-                label="Open Containing Folder",
-                command=lambda: self.open_folder_local(filepath))
+            if count == 1:
+                self.context_menu.add_command(
+                    label="Open File",
+                    command=lambda: self.open_file_local(filepaths[0]))
+                self.context_menu.add_command(
+                    label="Open Containing Folder",
+                    command=lambda: self.open_folder_local(filepaths[0]))
+            else:
+                self.context_menu.add_command(
+                    label=f"Open {count} Files",
+                    command=lambda ps=filepaths: [self.open_file_local(p) for p in ps])
             self.context_menu.add_separator()
         else:
-            self.context_menu.add_command(
-                label="Download && Open File",
-                command=lambda: self.open_file_ftp(filepath))
+            if count == 1:
+                self.context_menu.add_command(
+                    label="Download & Open File",
+                    command=lambda: self.open_file_ftp(filepaths[0]))
+            else:
+                self.context_menu.add_command(
+                    label=f"Download & Open {count} Files",
+                    command=lambda ps=filepaths: [self.open_file_ftp(p) for p in ps])
             self.context_menu.add_separator()
 
-        self.context_menu.add_command(
-            label="Copy File Path",
-            command=lambda: self.copy_to_clipboard(filepath))
-        self.context_menu.add_command(
-            label="Copy Line Content",
-            command=lambda: self.copy_to_clipboard(content))
+        if count == 1:
+            self.context_menu.add_command(
+                label="Copy File Path",
+                command=lambda: self.copy_to_clipboard(filepaths[0]))
+            self.context_menu.add_command(
+                label="Copy Line Content",
+                command=lambda: self.copy_to_clipboard(items_info[0]["content"]))
+        else:
+            self.context_menu.add_command(
+                label=f"Copy {count} File Paths",
+                command=lambda ps=filepaths: self.copy_to_clipboard("\n".join(ps)))
 
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
