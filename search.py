@@ -80,24 +80,27 @@ class TextSearchApp:
         self.browse_btn = ttk.Button(top_frame, text="Browse", command=self.browse_path)
         self.browse_btn.pack(side=tk.LEFT)
 
-        # Search text
-        ttk.Label(top_frame, text="Search:").pack(side=tk.LEFT, padx=(20, 0))
+        # Search row
+        search_frame = ttk.Frame(root, padding=(10, 0, 10, 5))
+        search_frame.pack(fill=tk.X)
+
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT)
         self.search_var = tk.StringVar()
-        ttk.Entry(top_frame, textvariable=self.search_var, width=30).pack(side=tk.LEFT, padx=5)
+        ttk.Entry(search_frame, textvariable=self.search_var, width=30).pack(side=tk.LEFT, padx=5)
 
         # File extensions
-        ttk.Label(top_frame, text="Ext:").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(search_frame, text="Ext:").pack(side=tk.LEFT, padx=(10, 0))
         self.ext_var = tk.StringVar(value="")
-        ttk.Entry(top_frame, textvariable=self.ext_var, width=15).pack(side=tk.LEFT, padx=5)
+        ttk.Entry(search_frame, textvariable=self.ext_var, width=15).pack(side=tk.LEFT, padx=5)
 
-        self.search_btn = ttk.Button(top_frame, text="Search", command=self.start_search)
-        self.search_btn.pack(side=tk.LEFT)
-        self.stop_btn = ttk.Button(top_frame, text="Stop", command=self.stop_search, state=tk.DISABLED)
+        self.search_btn = ttk.Button(search_frame, text="Search", command=self.start_search)
+        self.search_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self.stop_btn = ttk.Button(search_frame, text="Stop", command=self.stop_search, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         # Case sensitive checkbox
         self.case_var = tk.BooleanVar()
-        ttk.Checkbutton(top_frame, text="Case sensitive", variable=self.case_var).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(search_frame, text="Case sensitive", variable=self.case_var).pack(side=tk.LEFT, padx=10)
 
         # Status
         self.status_var = tk.StringVar(value="Ready")
@@ -286,6 +289,7 @@ class TextSearchApp:
         """Show/hide FTP options based on selected mode."""
         if self.mode_var.get() == "ftp":
             self.ftp_frame.pack(fill=tk.X, padx=10, pady=5, after=self.root.winfo_children()[0])
+            self.browse_btn.config(state=tk.DISABLED)
             self.path_var.set("/")  # Default FTP root
         else:
             self.ftp_frame.pack_forget()
@@ -312,6 +316,7 @@ class TextSearchApp:
             self.ftp_status_var.set(f"Connected to {host}")
             self.connect_btn.config(state=tk.DISABLED)
             self.disconnect_btn.config(state=tk.NORMAL)
+            self.browse_btn.config(state=tk.NORMAL)
             messagebox.showinfo("Success", f"Connected to {host}")
 
         except Exception as e:
@@ -354,6 +359,8 @@ class TextSearchApp:
         self.ftp_status_var.set("Not connected")
         self.connect_btn.config(state=tk.NORMAL)
         self.disconnect_btn.config(state=tk.DISABLED)
+        if self.mode_var.get() == "ftp":
+            self.browse_btn.config(state=tk.DISABLED)
 
     def browse_path(self):
         if self.mode_var.get() == "ftp":
