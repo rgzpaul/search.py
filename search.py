@@ -345,6 +345,7 @@ class TextSearchApp:
             except:
                 pass
             self.ftp = None
+        self.ftp_creds = {}
 
         self.ftp_status_var.set("Not connected")
         self.connect_btn.config(state=tk.NORMAL)
@@ -417,11 +418,19 @@ class TextSearchApp:
                         current_path[0] = ftp_path
                         path_label.config(text=f"Current: {ftp_path}")
 
-                    win.after(0, update_ui)
+                    try:
+                        win.after(0, update_ui)
+                    except tk.TclError:
+                        pass  # Window was closed
                 except Exception as e:
                     err_msg = str(e)
-                    win.after(0, lambda: listbox.delete(0, tk.END))
-                    win.after(0, lambda: listbox.insert(tk.END, f"Error: {err_msg}"))
+                    def show_error():
+                        listbox.delete(0, tk.END)
+                        listbox.insert(tk.END, f"Error: {err_msg}")
+                    try:
+                        win.after(0, show_error)
+                    except tk.TclError:
+                        pass  # Window was closed
 
             threading.Thread(target=fetch, daemon=True).start()
 
@@ -513,11 +522,13 @@ class TextSearchApp:
                             compare_line = line if case_sensitive else line.lower()
                             if search_lower in compare_line:
                                 count += 1
-                                self.tree.insert("", tk.END, values=(
-                                    filepath,
-                                    line_num,
-                                    line.strip()[:200]
-                                ))
+                                self.root.after(0, lambda fp=filepath, ln=line_num, l=line:
+                                    self.tree.insert("", tk.END, values=(
+                                        fp,
+                                        ln,
+                                        l.strip()[:200]
+                                    ))
+                                )
                 except:
                     pass
 
