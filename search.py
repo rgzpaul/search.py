@@ -236,8 +236,9 @@ class TextSearchApp:
                 self.root.after(0, lambda: self.prompt_ftp_reupload(
                     local_path, remote_path, mtime_before))
             except Exception as e:
+                err_msg = str(e)
                 self.root.after(0, lambda: messagebox.showerror(
-                    "Error", f"Could not download file:\n{e}"))
+                    "Error", f"Could not download file:\n{err_msg}"))
 
         threading.Thread(target=download_edit_upload, daemon=True).start()
 
@@ -265,8 +266,9 @@ class TextSearchApp:
                 self.root.after(0, lambda: messagebox.showinfo(
                     "Uploaded", f"Changes uploaded to:\n{remote_path}"))
             except Exception as e:
+                err_msg = str(e)
                 self.root.after(0, lambda: messagebox.showerror(
-                    "Upload Error", f"Could not upload file:\n{e}"))
+                    "Upload Error", f"Could not upload file:\n{err_msg}"))
 
         threading.Thread(target=do_upload, daemon=True).start()
 
